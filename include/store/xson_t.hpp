@@ -16,6 +16,19 @@ namespace store
 			e_vec,
 		};
 		struct obj_t;
+		struct event_t
+		{
+			std::string path_;
+			enum type_t
+			{
+				e_null,
+				e_add,
+				e_update,
+				e_delete,
+			}type_ = e_null;
+
+			obj_t *obj = NULL;
+		};
 		struct obj_t
 		{
 			type_t type_;
@@ -30,21 +43,10 @@ namespace store
 			} val_;
 			obj_t *parent_ = NULL;
 			obj_t *root = this;
+			uint32_t ver_= 0;
 			std::string key_;
+			std::map<std::string, std::function<void(event_t)>> watchers_;
 
-			struct event_t
-			{
-				std::string path;
-				enum type_t
-				{
-					e_null,
-					e_add,
-					e_update,
-					e_delete,
-				}type_ = e_null;
-
-				obj_t *obj = NULL;
-			};
 			obj_t()
 				:type_(e_null)
 			{
@@ -106,8 +108,16 @@ namespace store
 			typename std::enable_if<std::is_integral<T>::value, void>::type
 				operator=(T val)
 			{
+				event_t e;
+				if(type_ == e_null)
+					e.type_ = event_t::e_add;
+				else
+					e.type_ = event_t::e_update;
 				type_ = e_num;
 				val_.num_ = val;
+				make_path(e.path_);
+				e.obj = this;
+				on_change(e);
 			}
 			void operator=(bool val)
 			{
@@ -146,7 +156,7 @@ namespace store
 				}
 				return *itr->second;
 			}
-			bool should_change_change(bool b)
+			bool open_callback(bool b)
 			{
 				static bool val = false;
 				if (b == false)
@@ -155,38 +165,43 @@ namespace store
 					val = b;
 				return val;
 			}
-			void do_delete()
+			void del()
 			{
-				reset();
-				event_t::type_t et;
-
-				if (!should_change_change(false))
-					return;
-				std::string path;
-				make_path(path);
-				on_change(path, this);
-			}
-			void on_change()
-			{
-				event_t::type_t et;
-				if (type_ == event_t::e_null)
-					et = event_t::e_add;
-				else
-					et = event_t::e_update;
-				if (!should_change_change(false))
-					return;
-				std::string path;
-				make_path(path);
-				on_change(path, this);
-			}
-
-			void on_change(const std::string& path, obj_t *obj)
-			{
-				std::cout << str() << std::endl;
-				if (parent_ && obj != parent_)
+				if(type_ == e_obj)
 				{
-					parent_->on_change(path, obj);
+					for(auto &itr : *val_.obj_)
+						itr.second->del();
+				}else if (type_ == e_vec)
+				{
+					for(auto &itr : *val_.vec_)
+						itr->del();
 				}
+				event_t e;
+				make_path(e.path_);
+				if(e.path_.size())
+					e.path_.pop_back();
+				e.type_ = event_t::e_delete;
+				e.obj = this;
+				reset();
+				if (!open_callback(false))
+					return;
+				on_change(e);
+			}
+			void on_change(const  event_t &e)
+			{
+				for (auto &itr: watchers_)
+				{
+					itr.second(e);
+				}
+				if(parent_ && e.obj != parent_)
+				{
+					parent_->on_change(e);
+				}
+			}
+			bool add_watch(const std::string &id,
+						   std::function<void(const event_t &)> watcher)
+			{
+				return watchers_.insert(std::make_pair(id, watcher)).second;
 			}
 			void make_path(std::string &path)
 			{
@@ -204,6 +219,9 @@ namespace store
 				if (val_.vec_ == NULL)
 					val_.vec_ = new std::vector<obj_t *>;
 				obj_t *obj = new obj_t;
+				obj->parent_ = this;
+				obj->root = root;
+				obj->key_ = "$"+std::to_string(val_.vec_->size());
 				*obj = val;
 				val_.vec_->push_back(obj);
 				return *this;

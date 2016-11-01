@@ -5,16 +5,7 @@ namespace store
 {
 	namespace xson
 	{
-		enum type_t
-		{
-			e_null,
-			e_num,
-			e_str,
-			e_bool,
-			e_float,
-			e_obj,
-			e_vec,
-		};
+		
 		struct obj_t;
 		struct event_t
 		{
@@ -29,8 +20,20 @@ namespace store
 
 			obj_t *obj = NULL;
 		};
+		typedef std::function<void(const event_t &)> watcher_t;
 		struct obj_t
 		{
+			enum type_t
+			{
+				e_null,
+				e_num,
+				e_str,
+				e_bool,
+				e_float,
+				e_obj,
+				e_vec,
+			};
+
 			type_t type_;
 			union value_t
 			{
@@ -45,7 +48,7 @@ namespace store
 			obj_t *root = this;
 			uint32_t ver_= 0;
 			std::string key_;
-			std::map<std::string, std::function<void(event_t)>> watchers_;
+			std::map<std::string, watcher_t> watchers_;
 
 			obj_t()
 				:type_(e_null)
@@ -60,20 +63,20 @@ namespace store
 			{
 				switch (type_)
 				{
-				case xson::e_null:
-				case xson::e_num:
-				case xson::e_bool:
-				case xson::e_float:
+				case e_null:
+				case e_num:
+				case e_bool:
+				case e_float:
 					break;
-				case xson::e_str:
+				case e_str:
 					delete val_.str_;
 					break;
-				case xson::e_obj:
+				case e_obj:
 					for (auto&itr : *val_.obj_)
 						delete itr.second;
 					delete val_.obj_;
 					break;
-				case xson::e_vec:
+				case e_vec:
 					for (auto&itr : *val_.vec_)
 						delete itr;
 					delete val_.vec_;
@@ -85,52 +88,112 @@ namespace store
 			}
 			
 			template<typename T>
-			typename std::enable_if<std::is_floating_point<T>::value, void>::type
+			typename std::enable_if<std::is_floating_point<T>::value, obj_t &>::type
 				operator=(T val)
 			{
-				assert(type_ == e_null);
+				event_t e;
+				if (type_ == e_null)
+					e.type_ = event_t::e_add;
+				else
+				{
+					e.type_ = event_t::e_update;
+					reset();
+				}
 				type_ = e_float;
 				val_.double_ = val;
+				get_path(e.path_);
+				e.obj = this;
+				on_change(e);
+				return *this;
 			}
-			void operator=(const char *val)
+			obj_t &operator=(const char *val)
 			{
-				assert(type_ == e_null);
+				event_t e;
+				if (type_ == e_null)
+					e.type_ = event_t::e_add;
+				else
+				{
+					e.type_ = event_t::e_update;
+					reset();
+				}
 				type_ = e_str;
 				val_.str_ = new std::string(val);
+				get_path(e.path_);
+				e.obj = this;
+				on_change(e);
+				return *this;
 			}
 			
-			void operator=(const std::string &val)
+			obj_t& operator=(const std::string &val)
 			{
+				event_t e;
+				if (type_ == e_null)
+					e.type_ = event_t::e_add;
+				else
+				{
+					e.type_ = event_t::e_update;
+					reset();
+				}
 				type_ = e_str;
 				val_.str_ = new std::string(val);
+				get_path(e.path_);
+				e.obj = this;
+				on_change(e);
+				return *this;
 			}
 			template<typename T>
-			typename std::enable_if<std::is_integral<T>::value, void>::type
+			typename std::enable_if<std::is_integral<T>::value, obj_t&>::type
 				operator=(T val)
 			{
 				event_t e;
 				if(type_ == e_null)
 					e.type_ = event_t::e_add;
 				else
+				{
+					reset();
 					e.type_ = event_t::e_update;
+				}
 				type_ = e_num;
 				val_.num_ = val;
-				make_path(e.path_);
+				get_path(e.path_);
 				e.obj = this;
 				on_change(e);
+				return *this;
 			}
-			void operator=(bool val)
+			obj_t &operator =(bool val)
 			{
-				assert(type_ == e_null);
+				event_t e;
+				if (type_ == e_null)
+					e.type_ = event_t::e_add;
+				else
+				{
+					reset();
+					e.type_ = event_t::e_update;
+				}
 				type_ = e_bool;
 				val_.bool_ = val;
+				get_path(e.path_);
+				e.obj = this;
+				on_change(e);
+				return *this;
+
 			}
 			obj_t &operator=(obj_t &&obj)
 			{
+				event_t e;
+				if (type_ == e_null)
+					e.type_ = event_t::e_add;
+				else
+				{
+					reset();
+					e.type_ = event_t::e_update;
+				}
 				type_ = obj.type_;
 				val_ = obj.val_;
 				obj.type_ = e_null;
-				memset(&obj.val_, 0, sizeof(val_));
+				get_path(e.path_);
+				e.obj = this;
+				on_change(e);
 				return *this;
 			}
 			obj_t &operator[](const std::string & key)
@@ -156,7 +219,7 @@ namespace store
 				}
 				return *itr->second;
 			}
-			bool open_callback(bool b)
+			bool open_callback(bool b = false)
 			{
 				static bool val = false;
 				if (b == false)
@@ -167,23 +230,21 @@ namespace store
 			}
 			void del()
 			{
-				if(type_ == e_obj)
-				{
-					for(auto &itr : *val_.obj_)
+				if (type_ == e_obj)
+					for (auto &itr : *val_.obj_)
 						itr.second->del();
-				}else if (type_ == e_vec)
-				{
-					for(auto &itr : *val_.vec_)
+				else if ( type_ == e_vec)
+					for (auto &itr : *val_.vec_)
 						itr->del();
-				}
+
 				event_t e;
-				make_path(e.path_);
+				get_path(e.path_);
 				if(e.path_.size())
 					e.path_.pop_back();
 				e.type_ = event_t::e_delete;
 				e.obj = this;
 				reset();
-				if (!open_callback(false))
+				if (!open_callback())
 					return;
 				on_change(e);
 			}
@@ -198,17 +259,17 @@ namespace store
 					parent_->on_change(e);
 				}
 			}
-			bool add_watch(const std::string &id,
-						   std::function<void(const event_t &)> watcher)
+			bool watch(const std::string &id, watcher_t watcher)
 			{
-				return watchers_.insert(std::make_pair(id, watcher)).second;
+				return watchers_.
+					insert(std::make_pair(id, watcher)).second;
 			}
-			void make_path(std::string &path)
+			void get_path(std::string &path)
 			{
 				path = key_ +"\\" + path;
 				if (parent_ && parent_->key_.size())
 				{
-					parent_->make_path(path);
+					parent_->get_path(path);
 				}
 			}
 			template<typename T>
@@ -261,7 +322,9 @@ namespace store
 				return static_cast<T>(val_.double_);
 			}
 			template<class T>
-			typename std::enable_if<std::is_same<T, std::string>::value, std::string &>::type
+			typename std::enable_if<
+				std::is_same<T, std::string>::value, 
+				std::string &>::type
 				get()
 			{
 				assert(type_ == e_str);
@@ -333,7 +396,7 @@ namespace store
 			std::string map2str()
 			{
 				std::string str("{");
-				for (auto &itr: *val_.obj_)
+				for (auto &itr : *val_.obj_)
 				{
 					str += "\"";
 					str += itr.first;

@@ -1,16 +1,16 @@
 #pragma once
 #include "xmart.h"
 
-int main()
+int xon_test()
 {
 	using namespace xmart::store::xson;
 	obj_t obj;
-	obj.add_watch("a", [](const event_t &e) {
-		std::cout << (e.type_==event_t::e_add?"add":
-			(e.type_ == event_t::e_delete?"delete":
-					  (e.type_ == event_t::e_update? "update":"error_type")))
-			<< e.path_ << e.obj->str().c_str() << std::endl;
-	});
+// 	obj.watch("a", [](const event_t &e) {
+// 		std::cout << (e.type_==event_t::e_add?"add":
+// 			(e.type_ == event_t::e_delete?"delete":
+// 					  (e.type_ == event_t::e_update? "update":"error_type")))
+// 			<<"	"<< e.path_ <<"	"<< e.obj->str().c_str() << std::endl;
+// 	});
 
 	obj.open_callback(true);
 
@@ -33,8 +33,26 @@ int main()
 	}
 	*o = 3;
 
-	std::cout << obj.str().c_str() << std::endl;
 
 	obj["hello"]["world2"].get(1).del();
+	obj["hello"]["world2"].get(1) = 1;
+	obj["hello"]["world2"].get(1) = "hello world";
+	obj["hello"]["world2"].get(1) = std::move(obj_t() = 1);
+// 	obj["hello"].watch("a", [](const event_t &e) {
+// 		std::cout << (e.type_ == event_t::e_add ? "add" :
+// 			(e.type_ == event_t::e_delete ? "delete" :
+// 			(e.type_ == event_t::e_update ? "update" : "error_type")))
+// 			<< "	" << e.path_ << "	" << e.obj->str().c_str() << std::endl;
+// 	});
+	obj.del();
+	//std::cout << obj.str().c_str() << std::endl;;
 	return 0;
+}
+
+int main()
+{
+	do 
+	{
+		xon_test();
+	} while (1);
 }

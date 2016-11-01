@@ -25,13 +25,27 @@ namespace xstore
 						continue;
 					}
 				}
-				if (key.size())
+				if(key.size())
+				{
 					keys.emplace_back(key);
-				key.clear();
+					key.clear();
+				}
 			}
-			key.push_back(path[i]);
+			else if(path[i] == '/')
+			{
+				if(key.size())
+				{
+					keys.emplace_back(key);
+					key.clear();
+				}
+			}
+			else
+				key.push_back(path[i]);
 			++i;
 		}
+		if(key.size())
+			keys.emplace_back(key);
+		return keys;
 	}
 	enum class result_t
 	{

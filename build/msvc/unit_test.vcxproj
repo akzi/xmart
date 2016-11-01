@@ -113,6 +113,7 @@
   <ItemGroup>
     <ClCompile Include="..\..\unit_test\unit_test.cpp" />
     <ClCompile Include="..\..\unit_test\xson_test.cpp" />
+    <ClCompile Include="..\..\unit_test\xstore_test.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

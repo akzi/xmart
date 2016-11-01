@@ -589,6 +589,7 @@ namespace xstore
 		static inline obj_t* get_vec(int &pos, int len, const char *str)
 		{
 			obj_t *vec = new obj_t;
+			vec->type_ = obj_t::e_vec;
 
 			if (str[pos] == '[')
 				pos++;

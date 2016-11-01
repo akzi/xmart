@@ -19,8 +19,8 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{3DFCBFB2-0C1C-42C7-88CD-585165DBCAD3}</ProjectGuid>
-    <RootNamespace>xmart</RootNamespace>
+    <ProjectGuid>{A9CAC335-51AD-40B5-9C01-414130CB92CA}</ProjectGuid>
+    <RootNamespace>unit_test</RootNamespace>
     <WindowsTargetPlatformVersion>8.1</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -111,12 +111,8 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\include\store\xson_t.hpp" />
-    <ClInclude Include="..\..\include\store\xstore.hpp" />
-    <ClInclude Include="..\..\include\xmart.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="..\..\src\xmart.cpp" />
+    <ClCompile Include="..\..\unit_test\unit_test.cpp" />
+    <ClCompile Include="..\..\unit_test\xson_test.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

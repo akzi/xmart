@@ -1,772 +1,807 @@
 #pragma once
 namespace xmart
 {
-namespace store
+namespace xstore
 {
-	namespace xson
+	struct obj_t;
+	struct event_t
 	{
-		
-		struct obj_t;
-		struct event_t
+		std::string path_;
+		enum type_t
 		{
-			std::string path_;
-			enum type_t
-			{
-				e_null,
-				e_add,
-				e_update,
-				e_delete,
-			}type_ = e_null;
+			e_null,
+			e_add,
+			e_update,
+			e_delete,
+		}type_ = e_null;
 
-			obj_t *obj = NULL;
+		obj_t *obj = NULL;
+	};
+	typedef std::function<void(const event_t &)> watcher_t;
+	struct obj_t
+	{
+		enum type_t
+		{
+			e_null,
+			e_num,
+			e_str,
+			e_bool,
+			e_float,
+			e_obj,
+			e_vec,
 		};
-		typedef std::function<void(const event_t &)> watcher_t;
-		struct obj_t
+
+		type_t type_;
+		union value_t
 		{
-			enum type_t
-			{
-				e_null,
-				e_num,
-				e_str,
-				e_bool,
-				e_float,
-				e_obj,
-				e_vec,
-			};
+			std::string *str_;
+			int64_t num_;
+			double double_;
+			bool bool_;
+			std::map<std::string, obj_t*> *obj_;
+			std::vector<obj_t*> *vec_;
+		} val_;
+		obj_t *parent_ = NULL;
+		obj_t *root = this;
+		uint32_t ver_ = 0;
+		std::string key_;
+		std::map<std::string, watcher_t> watchers_;
 
-			type_t type_;
-			union value_t
+		obj_t()
+			:type_(e_null)
+		{
+			memset(&val_, 0, sizeof(val_));
+		}
+		virtual ~obj_t()
+		{
+			reset();
+		}
+		void reset()
+		{
+			switch (type_)
 			{
-				std::string *str_;
-				int64_t num_;
-				double double_;
-				bool bool_;
-				std::map<std::string,obj_t*> *obj_;
-				std::vector<obj_t*> *vec_;
-			} val_;
-			obj_t *parent_ = NULL;
-			obj_t *root = this;
-			uint32_t ver_= 0;
-			std::string key_;
-			std::map<std::string, watcher_t> watchers_;
-
-			obj_t()
-				:type_(e_null)
-			{
-				memset(&val_, 0, sizeof(val_));
+			case e_null:
+			case e_num:
+			case e_bool:
+			case e_float:
+				break;
+			case e_str:
+				delete val_.str_;
+				break;
+			case e_obj:
+				for (auto&itr : *val_.obj_)
+					delete itr.second;
+				delete val_.obj_;
+				break;
+			case e_vec:
+				for (auto&itr : *val_.vec_)
+					delete itr;
+				delete val_.vec_;
+				break;
+			default:
+				break;
 			}
-			virtual ~obj_t()
+			type_ = e_null;
+		}
+
+		template<typename T>
+		typename std::enable_if<std::is_floating_point<T>::value, obj_t &>::type
+			operator=(T val)
+		{
+			event_t e;
+			if (type_ == e_null)
+				e.type_ = event_t::e_add;
+			else
 			{
+				e.type_ = event_t::e_update;
 				reset();
 			}
-			void reset()
+			type_ = e_float;
+			val_.double_ = val;
+			get_path(e.path_);
+			e.obj = this;
+			on_change(e);
+			return *this;
+		}
+		obj_t &operator=(const char *val)
+		{
+			event_t e;
+			if (type_ == e_null)
+				e.type_ = event_t::e_add;
+			else
 			{
-				switch (type_)
+				e.type_ = event_t::e_update;
+				reset();
+			}
+			type_ = e_str;
+			val_.str_ = new std::string(val);
+			get_path(e.path_);
+			e.obj = this;
+			on_change(e);
+			return *this;
+		}
+
+		obj_t& operator=(const std::string &val)
+		{
+			event_t e;
+			if (type_ == e_null)
+				e.type_ = event_t::e_add;
+			else
+			{
+				e.type_ = event_t::e_update;
+				reset();
+			}
+			type_ = e_str;
+			val_.str_ = new std::string(val);
+			get_path(e.path_);
+			e.obj = this;
+			on_change(e);
+			return *this;
+		}
+		template<typename T>
+		typename std::enable_if<std::is_integral<T>::value, obj_t&>::type
+			operator=(T val)
+		{
+			event_t e;
+			if (type_ == e_null)
+				e.type_ = event_t::e_add;
+			else
+			{
+				reset();
+				e.type_ = event_t::e_update;
+			}
+			type_ = e_num;
+			val_.num_ = val;
+			get_path(e.path_);
+			e.obj = this;
+			on_change(e);
+			return *this;
+		}
+		obj_t &operator =(bool val)
+		{
+			event_t e;
+			if (type_ == e_null)
+				e.type_ = event_t::e_add;
+			else
+			{
+				reset();
+				e.type_ = event_t::e_update;
+			}
+			type_ = e_bool;
+			val_.bool_ = val;
+			get_path(e.path_);
+			e.obj = this;
+			on_change(e);
+			return *this;
+
+		}
+
+		obj_t &operator=(obj_t &&obj)
+		{
+			event_t e;
+			if (type_ == e_null)
+				e.type_ = event_t::e_add;
+			else
+			{
+				reset();
+				e.type_ = event_t::e_update;
+			}
+			type_ = obj.type_;
+			val_ = obj.val_;
+			obj.type_ = e_null;
+			get_path(e.path_);
+			e.obj = this;
+			on_change(e);
+			return *this;
+		}
+		obj_t &operator[](const std::string & key)
+		{
+			return operator[](key.c_str());
+		}
+
+		obj_t &operator[](const char *key)
+		{
+			if (type_ != e_obj)
+			{
+				reset();
+				type_ = e_obj;
+				val_.obj_ = new std::map<std::string, obj_t*>;
+			}
+			auto itr = val_.obj_->find(key);
+			if (itr == val_.obj_->end())
+			{
+				auto obj = new obj_t;
+				obj->parent_ = this;
+				obj->root = root;
+				obj->key_ = key;
+				val_.obj_->emplace(key, obj);
+				return *obj;
+			}
+			return *itr->second;
+		}
+		bool open_callback(bool b = false)
+		{
+			static bool val = false;
+			if (b == false)
+				return val;
+			else
+				val = b;
+			return val;
+		}
+		obj_t & add(const std::string &key, obj_t *o)
+		{
+			if (type_ != e_obj)
+			{
+				reset();
+				type_ = e_obj;
+				val_.obj_ = new std::map<std::string, obj_t*>;
+			}
+			val_.obj_->emplace(key, o);
+			return *this;
+		}
+		void del()
+		{
+			if (type_ == e_obj)
+				for (auto &itr : *val_.obj_)
+					itr.second->del();
+			else if (type_ == e_vec)
+				for (auto &itr : *val_.vec_)
+					itr->del();
+
+			event_t e;
+			get_path(e.path_);
+			if (e.path_.size())
+				e.path_.pop_back();
+			e.type_ = event_t::e_delete;
+			e.obj = this;
+			reset();
+			if (!open_callback())
+				return;
+			on_change(e);
+		}
+		void on_change(const  event_t &e)
+		{
+			for (auto &itr : watchers_)
+			{
+				itr.second(e);
+			}
+			if (parent_ && e.obj != parent_)
+			{
+				parent_->on_change(e);
+			}
+		}
+		bool watch(const std::string &id, watcher_t watcher)
+		{
+			return watchers_.
+				insert(std::make_pair(id, watcher)).second;
+		}
+		void get_path(std::string &path)
+		{
+			path = key_ + "\\" + path;
+			if (parent_ && parent_->key_.size())
+			{
+				parent_->get_path(path);
+			}
+		}
+		template<typename T>
+		obj_t& add(const T &val)
+		{
+			assert(type_ == e_vec || type_ == e_null);
+			type_ = e_vec;
+			if (val_.vec_ == NULL)
+				val_.vec_ = new std::vector<obj_t *>;
+			obj_t *obj = new obj_t;
+			obj->parent_ = this;
+			obj->root = root;
+			obj->key_ = "$" + std::to_string(val_.vec_->size());
+			*obj = val;
+			val_.vec_->push_back(obj);
+			return *this;
+		}
+
+		obj_t& add(obj_t *obj)
+		{
+			if (type_ != e_vec)
+			{
+				reset();
+				type_ = e_vec;
+				val_.vec_ = new std::vector<obj_t *>;
+			}
+			obj->parent_ = this;
+			obj->root = root;
+			val_.vec_->push_back(obj);
+			return *this;
+		}
+		template<class T>
+		typename std::enable_if<std::is_integral<T>::value &&
+			!std::is_same<T, bool>::value, T>::type
+			get()
+		{
+			assert(type_ == e_num);
+			return static_cast<T>(val_.num_);
+		}
+		template<class T>
+		typename std::enable_if<std::is_same<T, bool>::value, T>::type
+			get()
+		{
+			assert(type_ == e_bool);
+			return val_.bool_;
+		}
+		template<class T>
+		typename std::enable_if<std::is_floating_point<T>::value, T>::type
+			get()
+		{
+			assert(type_ == e_float);
+			return static_cast<T>(val_.double_);
+		}
+		template<class T>
+		typename std::enable_if<
+			std::is_same<T, std::string>::value,
+			std::string &>::type
+			get()
+		{
+			assert(type_ == e_str);
+			return *val_.str_;
+		}
+		template<typename T>
+		T get(std::size_t idx)
+		{
+			assert(type_ == e_vec);
+			assert(val_.vec_);
+			assert(idx < val_.vec_->size());
+			return ((*val_.vec_)[idx])->get<T>();
+		}
+		obj_t &get(std::size_t idx)
+		{
+			assert(type_ == e_vec);
+			assert(val_.vec_);
+			assert(idx < val_.vec_->size());
+			return *((*val_.vec_)[idx]);
+		}
+		bool is_null()
+		{
+			return type_ == e_null;
+		}
+		std::size_t len()
+		{
+			assert(type_ == e_vec);
+			return val_.vec_->size();
+		}
+		type_t type()
+		{
+			return type_;
+		}
+		std::string str()
+		{
+			switch (type_)
+			{
+			case e_bool:
+				return val_.bool_ ? "true" : "false";
+			case e_num:
+				return std::to_string(val_.num_);
+			case e_str:
+				return "\"" + *val_.str_ + "\"";
+			case e_obj:
+				return map2str();
+			case e_float:
+				return std::to_string(val_.double_);
+			case e_vec:
+				return vec2str();
+			}
+			return "null";
+		}
+		std::string vec2str()
+		{
+			std::string str("[");
+			assert(type_ == e_vec);
+			assert(val_.vec_);
+
+			for (auto &itr : *val_.vec_)
+			{
+				str += itr->str();
+				str += ", ";
+			}
+			str.pop_back();
+			str.pop_back();
+			str += "]";
+			return str;
+		}
+		std::string map2str()
+		{
+			std::string str("{");
+			for (auto &itr : *val_.obj_)
+			{
+				str += "\"";
+				str += itr.first;
+				str += "\":";
+				str += itr.second->str();
+				str += ", ";
+			}
+			str.pop_back();
+			str.pop_back();
+			str += "}";
+			return str;
+		}
+	};
+	static const obj_t null;
+
+	namespace parser
+	{
+		static inline bool
+			skip_space(int &pos, int len, const char * str)
+		{
+			assert(len > 0);
+			assert(pos >= 0);
+			assert(pos < len);
+
+			while (pos < len &&
+				(str[pos] == ' ' ||
+					str[pos] == '\r' ||
+					str[pos] == '\n' ||
+					str[pos] == '\t'))
+				++pos;
+
+			return pos < len;
+		}
+		static inline std::pair<bool, std::string>
+			get_text(int &pos, int len, const char *str)
+		{
+			assert(len > 0);
+			assert(pos >= 0);
+			assert(pos < len);
+			assert(str[pos] == '"');
+
+			std::string key;
+			++pos;
+			while (pos < len)
+			{
+				if (str[pos] != '"')
+					key.push_back(str[pos]);
+				else if (key.size() && key.back() == '\\')
+					key.push_back(str[pos]);
+				else
 				{
-				case e_null:
-				case e_num:
-				case e_bool:
-				case e_float:
+					++pos;
+					return{ true, key };
+				}
+				++pos;
+			}
+			return{ false,"" };
+		}
+		static int get_bool(int &pos, int len, const char *str)
+		{
+			assert(len > 0);
+			assert(pos >= 0);
+			assert(pos < len);
+			assert(str[pos] == 't' || str[pos] == 'f');
+			std::string key;
+
+			while (pos < len)
+			{
+				if (isalpha(str[pos]))
+					key.push_back(str[pos]);
+				else
 					break;
-				case e_str:
-					delete val_.str_;
+				++pos;
+			}
+			if (key == "true")
+				return 1;
+			else if (key == "false")
+				return 0;
+			return -1;
+		}
+		static inline bool get_null(int &pos, int len, const char *str)
+		{
+			assert(len > 0);
+			assert(pos >= 0);
+			assert(pos < len);
+			assert(str[pos] == 'n');
+			std::string null;
+
+			while (pos < len)
+			{
+				if (isalpha(str[pos]))
+					null.push_back(str[pos]);
+				else
 					break;
-				case e_obj:
-					for (auto&itr : *val_.obj_)
-						delete itr.second;
-					delete val_.obj_;
+				++pos;
+			}
+			if (null == "null")
+				return true;
+			return false;
+		}
+		static inline obj_t *get_num(int &pos, int len, const char *str)
+		{
+			bool sym = false;
+			std::string tmp;
+			while (pos < len)
+			{
+				if (str[pos] >= '0' &&str[pos] <= '9')
+				{
+					tmp.push_back(str[pos]);
+					++pos;
+				}
+				else if (str[pos] == '.')
+				{
+					tmp.push_back(str[pos]);
+					++pos;
+					if (sym == false)
+						sym = true;
+					else
+						return nullptr;
+				}
+				else
 					break;
-				case e_vec:
-					for (auto&itr : *val_.vec_)
-						delete itr;
-					delete val_.vec_;
+			}
+			errno = 0;
+			if (sym)
+			{
+				double d = std::strtod(tmp.c_str(), 0);
+				if (errno == ERANGE)
+					return nullptr;
+				obj_t *o = new obj_t;
+				*o = d;
+				return o;
+			}
+			int64_t val = std::strtoll(tmp.c_str(), 0, 10);
+			if (errno == ERANGE)
+				return nullptr;
+			obj_t *o = new obj_t;
+			*o = val;
+			return o;
+		}
+
+		static inline obj_t *get_obj(int &pos, int len, const char * str);
+		static inline obj_t* get_vec(int &pos, int len, const char *str)
+		{
+			obj_t *vec = new obj_t;
+			if (str[pos] == '[')
+				pos++;
+			while (pos < len)
+			{
+				switch (str[pos])
+				{
+				case ']':
+					++pos;
+					return vec;
+				case '[':
+				{
+					obj_t * obj = get_vec(pos, len, str);
+					if (!!!obj)
+						goto fail;
+					vec->add(obj);
+					break;
+				}
+				case '"':
+				{
+					std::pair<bool, std::string > res = get_text(pos, len, str);
+					if (res.first == false)
+						goto fail;
+					vec->add(res.second);
+					break;
+				}
+				case 'n':
+					if (get_null(pos, len, str))
+					{
+						vec->add(new obj_t);
+						break;
+					}
+				case '{':
+				{
+					obj_t *tmp = get_obj(pos, len, str);
+					if (!!!tmp)
+						goto fail;
+					vec->add(tmp);
+					break;
+				}
+				case 'f':
+				case 't':
+				{
+					int b = get_bool(pos, len, str);
+					if (b == 0)
+						vec->add(false);
+					else if (b == 1)
+						vec->add(true);
+					else
+						goto fail;
+					break;
+				}
+				case ',':
+				case ' ':
+				case '\r':
+				case '\n':
+				case '\t':
+					++pos;
 					break;
 				default:
-					break;
-				}
-				type_ = e_null;
-			}
-			
-			template<typename T>
-			typename std::enable_if<std::is_floating_point<T>::value, obj_t &>::type
-				operator=(T val)
-			{
-				event_t e;
-				if (type_ == e_null)
-					e.type_ = event_t::e_add;
-				else
-				{
-					e.type_ = event_t::e_update;
-					reset();
-				}
-				type_ = e_float;
-				val_.double_ = val;
-				get_path(e.path_);
-				e.obj = this;
-				on_change(e);
-				return *this;
-			}
-			obj_t &operator=(const char *val)
-			{
-				event_t e;
-				if (type_ == e_null)
-					e.type_ = event_t::e_add;
-				else
-				{
-					e.type_ = event_t::e_update;
-					reset();
-				}
-				type_ = e_str;
-				val_.str_ = new std::string(val);
-				get_path(e.path_);
-				e.obj = this;
-				on_change(e);
-				return *this;
-			}
-			
-			obj_t& operator=(const std::string &val)
-			{
-				event_t e;
-				if (type_ == e_null)
-					e.type_ = event_t::e_add;
-				else
-				{
-					e.type_ = event_t::e_update;
-					reset();
-				}
-				type_ = e_str;
-				val_.str_ = new std::string(val);
-				get_path(e.path_);
-				e.obj = this;
-				on_change(e);
-				return *this;
-			}
-			template<typename T>
-			typename std::enable_if<std::is_integral<T>::value, obj_t&>::type
-				operator=(T val)
-			{
-				event_t e;
-				if(type_ == e_null)
-					e.type_ = event_t::e_add;
-				else
-				{
-					reset();
-					e.type_ = event_t::e_update;
-				}
-				type_ = e_num;
-				val_.num_ = val;
-				get_path(e.path_);
-				e.obj = this;
-				on_change(e);
-				return *this;
-			}
-			obj_t &operator =(bool val)
-			{
-				event_t e;
-				if (type_ == e_null)
-					e.type_ = event_t::e_add;
-				else
-				{
-					reset();
-					e.type_ = event_t::e_update;
-				}
-				type_ = e_bool;
-				val_.bool_ = val;
-				get_path(e.path_);
-				e.obj = this;
-				on_change(e);
-				return *this;
-
-			}
-			obj_t &operator=(obj_t &&obj)
-			{
-				event_t e;
-				if (type_ == e_null)
-					e.type_ = event_t::e_add;
-				else
-				{
-					reset();
-					e.type_ = event_t::e_update;
-				}
-				type_ = obj.type_;
-				val_ = obj.val_;
-				obj.type_ = e_null;
-				get_path(e.path_);
-				e.obj = this;
-				on_change(e);
-				return *this;
-			}
-			obj_t &operator[](const std::string & key)
-			{
-				return operator[](key.c_str());
-			}
-
-			obj_t &operator[](const char *key)
-			{
-				assert(type_ == e_null || type_ == e_obj);
-				type_ = e_obj;
-				if (!!!val_.obj_)
-					val_.obj_ = new std::map<std::string, obj_t*>;
-				auto itr = val_.obj_->find(key);
-				if (itr == val_.obj_->end())
-				{
-					auto obj = new obj_t;
-					obj->parent_ = this;
-					obj->root = root;
-					obj->key_ = key;
-					val_.obj_->emplace(key, obj);
-					return *obj;
-				}
-				return *itr->second;
-			}
-			bool open_callback(bool b = false)
-			{
-				static bool val = false;
-				if (b == false)
-					return val;
-				else
-					val = b;
-				return val;
-			}
-			void del()
-			{
-				if (type_ == e_obj)
-					for (auto &itr : *val_.obj_)
-						itr.second->del();
-				else if ( type_ == e_vec)
-					for (auto &itr : *val_.vec_)
-						itr->del();
-
-				event_t e;
-				get_path(e.path_);
-				if(e.path_.size())
-					e.path_.pop_back();
-				e.type_ = event_t::e_delete;
-				e.obj = this;
-				reset();
-				if (!open_callback())
-					return;
-				on_change(e);
-			}
-			void on_change(const  event_t &e)
-			{
-				for (auto &itr: watchers_)
-				{
-					itr.second(e);
-				}
-				if(parent_ && e.obj != parent_)
-				{
-					parent_->on_change(e);
-				}
-			}
-			bool watch(const std::string &id, watcher_t watcher)
-			{
-				return watchers_.
-					insert(std::make_pair(id, watcher)).second;
-			}
-			void get_path(std::string &path)
-			{
-				path = key_ +"\\" + path;
-				if (parent_ && parent_->key_.size())
-				{
-					parent_->get_path(path);
-				}
-			}
-			template<typename T>
-			obj_t& add(const T &val)
-			{
-				assert(type_ == e_vec || type_ == e_null);
-				type_ = e_vec;
-				if (val_.vec_ == NULL)
-					val_.vec_ = new std::vector<obj_t *>;
-				obj_t *obj = new obj_t;
-				obj->parent_ = this;
-				obj->root = root;
-				obj->key_ = "$"+std::to_string(val_.vec_->size());
-				*obj = val;
-				val_.vec_->push_back(obj);
-				return *this;
-			}
-			
-			obj_t& add(obj_t *obj)
-			{
-				assert(type_ == e_vec || type_ == e_null);
-				type_ = e_vec;
-				if (val_.vec_ == NULL)
-					val_.vec_ = new std::vector<obj_t *>;
-				obj->parent_ = this;
-				obj->root = root;
-				val_.vec_->push_back(obj);
-				return *this;
-			}
-			template<class T>
-			typename std::enable_if<std::is_integral<T>::value &&
-				!std::is_same<T, bool>::value, T>::type
-				get()
-			{
-				assert(type_ == e_num);
-				return static_cast<T>(val_.num_);
-			}
-			template<class T>
-			typename std::enable_if<std::is_same<T, bool>::value, T>::type
-				get()
-			{
-				assert(type_ == e_bool);
-				return val_.bool_;
-			}
-			template<class T>
-			typename std::enable_if<std::is_floating_point<T>::value, T>::type
-				get()
-			{
-				assert(type_ == e_float);
-				return static_cast<T>(val_.double_);
-			}
-			template<class T>
-			typename std::enable_if<
-				std::is_same<T, std::string>::value, 
-				std::string &>::type
-				get()
-			{
-				assert(type_ == e_str);
-				return *val_.str_;
-			}
-			template<typename T>
-			T get(std::size_t idx)
-			{
-				assert(type_ == e_vec);
-				assert(val_.vec_);
-				assert(idx < val_.vec_->size());
-				return ((*val_.vec_)[idx])->get<T>();
-			}
-			obj_t &get(std::size_t idx)
-			{
-				assert(type_ == e_vec);
-				assert(val_.vec_);
-				assert(idx < val_.vec_->size());
-				return *((*val_.vec_)[idx]);
-			}
-			bool is_null()
-			{
-				return type_ == e_null;
-			}
-			std::size_t len()
-			{
-				assert(type_ == e_vec);
-				return val_.vec_->size();
-			}
-			type_t type()
-			{
-				return type_;
-			}
-			std::string str()
-			{
-				switch (type_)
-				{
-				case e_bool:
-					return val_.bool_ ? "true" : "false";
-				case e_num:
-					return std::to_string(val_.num_);
-				case e_str:
-					return "\"" + *val_.str_ + "\"";
-				case e_obj:
-					return map2str();
-				case e_float:
-					return std::to_string(val_.double_);
-				case e_vec:
-					return vec2str();
-				}
-				return "null";
-			}
-			std::string vec2str()
-			{
-				std::string str("[");
-				assert(type_ == e_vec);
-				assert(val_.vec_);
-
-				for (auto &itr : *val_.vec_)
-				{
-					str += itr->str();
-					str += ", ";
-				}
-				str.pop_back();
-				str.pop_back();
-				str += "]";
-				return str;
-			}
-			std::string map2str()
-			{
-				std::string str("{");
-				for (auto &itr : *val_.obj_)
-				{
-					str += "\"";
-					str += itr.first;
-					str += "\":";
-					str += itr.second->str();
-					str += ", ";
-				}
-				str.pop_back();
-				str.pop_back();
-				str += "}";
-				return str;
-			}
-		};
-		static const obj_t null;
-	
-		namespace parser
-		{
-			static inline bool
-				skip_space(int &pos, int len, const char * str)
-			{
-				assert(len > 0);
-				assert(pos >= 0);
-				assert(pos < len);
-
-				while (pos < len &&
-					(str[pos] == ' ' ||
-						str[pos] == '\r' ||
-						str[pos] == '\n' ||
-						str[pos] == '\t'))
-					++pos;
-
-				return pos < len;
-			}
-			static inline std::pair<bool, std::string>
-				get_text(int &pos, int len, const char *str)
-			{
-				assert(len > 0);
-				assert(pos >= 0);
-				assert(pos < len);
-				assert(str[pos] == '"');
-
-				std::string key;
-				++pos;
-				while (pos < len)
-				{
-					if (str[pos] != '"')
-						key.push_back(str[pos]);
-					else if (key.size() && key.back() == '\\')
-						key.push_back(str[pos]);
-					else
+					if (str[pos] == '-' || str[pos] >= '0' && str[pos] <= '9')
 					{
-						++pos;
-						return{ true, key };
-					}
-					++pos;
-				}
-				return{ false,"" };
-			}
-			static int get_bool(int &pos, int len, const char *str)
-			{
-				assert(len > 0);
-				assert(pos >= 0);
-				assert(pos < len);
-				assert(str[pos] == 't' || str[pos] == 'f');
-				std::string key;
-
-				while (pos < len)
-				{
-					if (isalpha(str[pos]))
-						key.push_back(str[pos]);
-					else
-						break;
-					++pos;
-				}
-				if (key == "true")
-					return 1;
-				else if (key == "false")
-					return 0;
-				return -1;
-			}
-			static inline bool get_null(int &pos, int len, const char *str)
-			{
-				assert(len > 0);
-				assert(pos >= 0);
-				assert(pos < len);
-				assert(str[pos] == 'n');
-				std::string null;
-
-				while (pos < len)
-				{
-					if (isalpha(str[pos]))
-						null.push_back(str[pos]);
-					else
-						break;
-					++pos;
-				}
-				if (null == "null")
-					return true;
-				return false;
-			}
-			static inline std::string get_num(
-				bool &sym, int &pos, int len, const char *str)
-			{
-				sym = false;
-				std::string tmp;
-				while (pos < len)
-				{
-					if (str[pos] >= '0' &&str[pos] <= '9')
-					{
-						tmp.push_back(str[pos]);
-						++pos;
-					}
-					else if (str[pos] == '.')
-					{
-						tmp.push_back(str[pos]);
-						++pos;
-						if (sym == false)
-							sym = true;
-						else
-							return false;
-					}
-					else
-						break;
-				}
-				return tmp;
-			}
-
-			static inline obj_t *get_obj(int &pos, int len, const char * str);
-			static inline obj_t* get_vec(int &pos, int len, const char *str)
-			{
-				obj_t *vec = new obj_t;
-				if (str[pos] == '[')
-					pos++;
-				while (pos < len)
-				{
-					switch (str[pos])
-					{
-					case ']':
-						++pos;
-						return vec;
-					case '[':
-					{
-						obj_t * obj = get_vec(pos, len, str);
-						if (!!!obj)
+						obj_t *o = get_num(pos, len, str);
+						if (o == nullptr)
 							goto fail;
-						vec->add(obj);
-						break;
-					}
-					case '"':
-					{
-						std::pair<bool, std::string > res = get_text(pos, len, str);
-						if (res.first == false)
-							goto fail;
-						vec->add(res.second);
-						break;
-					}
-					case 'n':
-						if (get_null(pos, len, str))
-						{
-							vec->add(new obj_t);
-							break;
-						}
-					case '{':
-					{
-						obj_t *tmp = get_obj(pos, len, str);
-						if (!!!tmp)
-							goto fail;
-						vec->add(tmp);
-						break;
-					}
-					case 'f':
-					case 't':
-					{
-						int b = get_bool(pos, len, str);
-						if (b == 0)
-							vec->add(false);
-						else if (b == 1)
-							vec->add(true);
-						else
-							goto fail;
-						break;
-					}
-					case ',':
-					case ' ':
-					case '\r':
-					case '\n':
-					case '\t':
-						++pos;
-						break;
-					default:
-						if (str[pos] == '-' || str[pos] >= '0' && str[pos] <= '9')
-						{
-							bool is_float = false;
-							std::string tmp = get_num(is_float, pos, len, str);
-							errno = 0;
-							if (is_float)
-							{
-								double d = std::strtod(tmp.c_str(), 0);
-								if (errno == ERANGE)
-									goto fail;
-								vec->add(d);
-							}
-							else
-							{
-								int64_t val = std::strtoll(tmp.c_str(), 0, 10);
-								if (errno == ERANGE)
-									goto fail;
-								vec->add(val);
-							}
-						}
+						vec->add(o);
 					}
 				}
-
-			fail:
-				delete vec;
-				return NULL;
 			}
 
-#define check_ahead(ch)\
+		fail:
+			delete vec;
+			return NULL;
+		}
+
+		#define check_ahead(ch)\
 		do{\
-				if(!skip_space(pos, len, str))\
+			if(!skip_space(pos, len, str))\
 					goto fail; \
-					if(str[pos] != ch)\
-						goto fail;\
+			if(str[pos] != ch)\
+				goto fail;\
 		} while(0)
 
-			static inline obj_t *get_obj(int &pos, int len, const char * str)
-			{
-				obj_t *obj_ptr = new obj_t;
-				obj_t &obj = *obj_ptr;
-				std::string key;
+		static inline obj_t *get_obj(int &pos, int len, const char * str)
+		{
+			obj_t *obj_ptr = new obj_t;
+			obj_t &obj = *obj_ptr;
+			std::string key;
 
-				skip_space(pos, len, str);
-				if (pos >= len)
-					goto fail;
-				if (str[pos] == '{')
-					++pos;
-				else
-					goto fail;
-				while (pos < len)
+			skip_space(pos, len, str);
+			if (pos >= len)
+				goto fail;
+			if (str[pos] == '{')
+				++pos;
+			else
+				goto fail;
+			while (pos < len)
+			{
+				switch (str[pos])
 				{
-					switch (str[pos])
+				case '"':
+				{
+					std::pair<bool, std::string > res = get_text(pos, len, str);
+					if (res.first == false)
+						goto fail;
+					if (key.empty())
 					{
-					case '"':
-					{
-						std::pair<bool, std::string > res = get_text(pos, len, str);
-						if (res.first == false)
-							goto fail;
-						if (key.empty())
-						{
-							key = res.second;
-							check_ahead(':');
-						}
-						else
-						{
-							obj[key] = res.second;
-							key.clear();
-						}
-						break;
+						key = res.second;
+						check_ahead(':');
 					}
-					case 'f':
-					case 't':
+					else
 					{
-						if (key.empty())
-							goto fail;
-						int b = get_bool(pos, len, str);
-						if (b == 0)
-							obj[key] = false;
-						else if (b == 1)
-							obj[key] = true;
-						else
-							goto fail;
+						obj[key] = res.second;
 						key.clear();
-						break;
 					}
-					case 'n':
+					break;
+				}
+				case 'f':
+				case 't':
+				{
+					if (key.empty())
+						goto fail;
+					int b = get_bool(pos, len, str);
+					if (b == 0)
+						obj[key] = false;
+					else if (b == 1)
+						obj[key] = true;
+					else
+						goto fail;
+					key.clear();
+					break;
+				}
+				case 'n':
+				{
+					if (key.empty() || get_null(pos, len, str) == false)
+						goto fail;
+					obj[key];
+				}
+				case '{':
+				{
+					if (key.empty())
+						goto fail;
+					obj_t *o = get_obj(pos, len, str);
+					if (o == NULL)
+						goto fail;
+					obj[key] = std::move(*o);
+					key.clear();
+					break;
+				}
+				case '}':
+					if (key.size())
+						goto fail;
+					++pos;
+					return obj_ptr;
+				case ':':
+				{
+					if (key.empty())
+						goto fail;
+					++pos;
+					break;
+				}
+				case ',':
+				{
+					++pos;
+					check_ahead('"');
+					break;
+				}
+				case ' ':
+				case '\r':
+				case '\n':
+				case '\t':
+					++pos;
+					break;
+				case '[':
+				{
+					obj_t *vec = get_vec(pos, len, str);
+					if (!!!vec || key.empty())
+						goto fail;
+					obj[key] = std::move(*vec);
+					key.clear();
+					break;
+				}
+				default:
+					if (str[pos] == '-' || str[pos] >= '0' && str[pos] <= '9')
 					{
-						if (key.empty() || get_null(pos, len, str) == false)
+						obj_t *o = get_num(pos, len, str);
+						if (!o)
 							goto fail;
-						obj[key];
-					}
-					case '{':
-					{
-						if (key.empty())
-							goto fail;
-						obj_t *o = get_obj(pos, len, str);
-						if (o == NULL)
-							goto fail;
-						obj[key] = std::move(*o);
-						key.clear();
-						break;
-					}
-					case '}':
-						if (key.size())
-							goto fail;
-						++pos;
-						return obj_ptr;
-					case ':':
-					{
-						if (key.empty())
-							goto fail;
-						++pos;
-						break;
-					}
-					case ',':
-					{
-						++pos;
-						check_ahead('"');
-						break;
-					}
-					case ' ':
-					case '\r':
-					case '\n':
-					case '\t':
-						++pos;
-						break;
-					case '[':
-					{
-						obj_t *vec = get_vec(pos, len, str);
-						if (!!!vec || key.empty())
-							goto fail;
-						obj[key] =  std::move(*vec);
-						key.clear();
-						break;
-					}
-					default:
-						if (str[pos] == '-' || str[pos] >= '0' && str[pos] <= '9')
-						{
-							bool is_float = false;
-							std::string tmp = get_num(is_float, pos, len, str);
-							errno = 0;
-							if (is_float)
-							{
-								double d = std::strtod(tmp.c_str(), 0);
-								if (errno == ERANGE)
-									return false;
-								obj[key] = d;
-								key.clear();
-							}
-							else
-							{
-								int64_t val = std::strtoll(tmp.c_str(), 0, 10);
-								if (errno == ERANGE)
-									return false;
-								obj[key] = val;
-								key.clear();
-							}
-						}
+						obj[key]
 					}
 				}
+			}
 
-			fail:
-				delete obj_ptr;
-				return NULL;
+		fail:
+			delete obj_ptr;
+			return NULL;
+		}
+	}
+	static inline obj_t *build_obj(const std::string &str)
+	{
+		
+	}
+	static inline obj_t *build_obj(const char *str, int len)
+	{
+		int pos = 0;
+		if (parser::skip_space(pos, len, str) == false)
+			return nullptr;
+		char ch = str[pos];
+		if (ch == '{')
+		{
+			return parser::get_obj(pos, len, str);
+		}
+		else if (ch == '[')
+		{
+			return parser::get_vec(pos, len, str);
+		}
+		else if (ch == '"')
+		{
+			auto res = parser::get_text(pos, len, str);
+			if (res.first) {
+				obj_t *o = new obj_t;
+				*o = res.second;
+				return o;
 			}
 		}
-		static inline obj_t *build_json(const std::string &str)
+		else if (ch == 'n')
 		{
-			int pos = 0;
-			return parser::get_obj(pos, (int)str.size(), str.c_str());
+			auto res = parser::get_null(pos, len, str);
+			if (res)
+				return new obj_t;
 		}
-		static inline obj_t *build_json(const char *str)
+		else if (('0' <= ch && '9' >= ch)|| '-' == ch || '+' == ch)
 		{
-			int pos = 0;
-			return parser::get_obj(pos, (int)strlen(str), str);
+			return  parser::get_num(pos, len, str);
 		}
-		static inline void destory_json(obj_t *json)
+		else if (ch == 't' || ch == 'f')
 		{
-			delete json;
+			auto res = parser::get_bool(pos, len, str);
+			if (res < 0)
+				return nullptr;
+			obj_t *obj = new obj_t;
+			*obj = !!res;
 		}
+		return nullptr;
+	}
+	static inline void del_obj(obj_t *json)
+	{
+		delete json;
 	}
 }
 }

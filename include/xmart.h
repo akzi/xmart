@@ -9,5 +9,7 @@
 #include <iostream>
 #include <ctype.h>
 #include <stdlib.h>
-
+#include "../deps/xjson/include/xjson.hpp"
+#include "../deps/xtest/include/xtest.hpp"
 #include "store/xson_t.hpp"
+#include "store/xstore.hpp"

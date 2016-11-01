@@ -13,26 +13,12 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
-    <Filter Include="头文件\store">
-      <UniqueIdentifier>{a60f9f37-f36a-48e0-b7c1-36f185559963}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="源文件\store">
-      <UniqueIdentifier>{f14c698d-8d65-40c7-9f18-99fe66383b0f}</UniqueIdentifier>
-    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\include\xmart.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\include\store\xstore.hpp">
-      <Filter>头文件\store</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\include\store\xson_t.hpp">
-      <Filter>头文件\store</Filter>
-    </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="..\..\src\xmart.cpp">
+    <ClCompile Include="..\..\unit_test\xson_test.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\unit_test\unit_test.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>

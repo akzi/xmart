@@ -7,19 +7,21 @@ namespace xstore
 	struct event_t
 	{
 		std::string path_;
+		std::string id_;
 		enum type_t
 		{
 			e_null,
 			e_add,
 			e_update,
 			e_delete,
+			e_lost_watcher,
 		}type_ = e_null;
 
 		obj_t *obj = NULL;
 	};
-	typedef std::function<void(const event_t &)> watcher_t;
 	struct obj_t
 	{
+		typedef std::function<void(const event_t &)> watcher_t;
 		enum type_t
 		{
 			e_null,
@@ -54,9 +56,9 @@ namespace xstore
 		}
 		virtual ~obj_t()
 		{
-			reset();
+			reset_val();
 		}
-		void reset()
+		void reset_val()
 		{
 			switch (type_)
 			{
@@ -85,7 +87,8 @@ namespace xstore
 		}
 
 		template<typename T>
-		typename std::enable_if<std::is_floating_point<T>::value, obj_t &>::type
+		typename std::enable_if<
+			std::is_floating_point<T>::value, obj_t &>::type
 			operator=(T val)
 		{
 			event_t e;
@@ -94,7 +97,6 @@ namespace xstore
 			else
 			{
 				e.type_ = event_t::e_update;
-				reset();
 			}
 			type_ = e_float;
 			val_.double_ = val;
@@ -111,7 +113,7 @@ namespace xstore
 			else
 			{
 				e.type_ = event_t::e_update;
-				reset();
+
 			}
 			type_ = e_str;
 			val_.str_ = new std::string(val);
@@ -123,23 +125,12 @@ namespace xstore
 
 		obj_t& operator=(const std::string &val)
 		{
-			event_t e;
-			if (type_ == e_null)
-				e.type_ = event_t::e_add;
-			else
-			{
-				e.type_ = event_t::e_update;
-				reset();
-			}
-			type_ = e_str;
-			val_.str_ = new std::string(val);
-			get_path(e.path_);
-			e.obj = this;
-			on_change(e);
-			return *this;
+			return operator=(val.c_str());
 		}
+
 		template<typename T>
-		typename std::enable_if<std::is_integral<T>::value, obj_t&>::type
+		typename std::enable_if<
+			std::is_integral<T>::value, obj_t&>::type
 			operator=(T val)
 		{
 			event_t e;
@@ -147,7 +138,6 @@ namespace xstore
 				e.type_ = event_t::e_add;
 			else
 			{
-				reset();
 				e.type_ = event_t::e_update;
 			}
 			type_ = e_num;
@@ -164,7 +154,6 @@ namespace xstore
 				e.type_ = event_t::e_add;
 			else
 			{
-				reset();
 				e.type_ = event_t::e_update;
 			}
 			type_ = e_bool;
@@ -178,14 +167,9 @@ namespace xstore
 
 		obj_t &operator=(obj_t &&obj)
 		{
+			assert(type_ == e_null);
 			event_t e;
-			if (type_ == e_null)
-				e.type_ = event_t::e_add;
-			else
-			{
-				reset();
-				e.type_ = event_t::e_update;
-			}
+			e.type_ = event_t::e_add;
 			type_ = obj.type_;
 			val_ = obj.val_;
 			obj.type_ = e_null;
@@ -194,16 +178,18 @@ namespace xstore
 			on_change(e);
 			return *this;
 		}
-		obj_t &operator[](const std::string & key)
+		obj_t *operator[](const std::string & key)
 		{
 			return operator[](key.c_str());
 		}
 
-		obj_t &operator[](const char *key)
+		obj_t *operator[](const char *key)
 		{
-			if (type_ != e_obj)
+			if(type_ != e_obj && type_ != e_null)
+				return nullptr;
+
+			if(type_ == e_null)
 			{
-				reset();
 				type_ = e_obj;
 				val_.obj_ = new std::map<std::string, obj_t*>;
 			}
@@ -215,9 +201,9 @@ namespace xstore
 				obj->root = root;
 				obj->key_ = key;
 				val_.obj_->emplace(key, obj);
-				return *obj;
+				return obj;
 			}
-			return *itr->second;
+			return itr->second;
 		}
 		bool open_callback(bool b = false)
 		{
@@ -228,16 +214,26 @@ namespace xstore
 				val = b;
 			return val;
 		}
-		obj_t & add(const std::string &key, obj_t *o)
+		bool insert(const std::string &key, obj_t *o)
 		{
-			if (type_ != e_obj)
+			if(type_ != e_obj && type_ != e_null)
+				return false;
+			if(type_ == e_null)
 			{
-				reset();
 				type_ = e_obj;
 				val_.obj_ = new std::map<std::string, obj_t*>;
 			}
+
+			o->root = root;
+			o->parent_ = this;
+			o->key_ = key;
 			val_.obj_->emplace(key, o);
-			return *this;
+			event_t e;
+			e.type_ = event_t::e_add;
+			e.obj = o;
+			o->get_path(e.path_);
+			o->on_change(e);
+			return true;
 		}
 		void del()
 		{
@@ -254,21 +250,43 @@ namespace xstore
 				e.path_.pop_back();
 			e.type_ = event_t::e_delete;
 			e.obj = this;
-			reset();
-			if (!open_callback())
-				return;
-			on_change(e);
+			reset_val();
+			if (open_callback())
+				on_change(e);
+			reset_watcher();
 		}
-		void on_change(const  event_t &e)
+		void on_change(event_t &e)
 		{
+			if(e.path_.size() && e.path_.back() == '\\')
+				e.path_.pop_back();
 			for (auto &itr : watchers_)
 			{
+				e.id_ = itr.first;
 				itr.second(e);
 			}
 			if (parent_ && e.obj != parent_)
 			{
 				parent_->on_change(e);
 			}
+		}
+		void reset_watcher()
+		{
+			event_t e;
+			e.type_ = event_t::e_lost_watcher;
+			e.obj = this;
+			get_path(e.path_);
+			for (auto &itr : watchers_)
+			{
+				e.id_ = itr.first;
+				itr.second(e);
+			}
+			watchers_.clear();
+		}
+		void del_watch(const std::string &id)
+		{
+			auto itr = watchers_.find(id);
+			if(itr != watchers_.end())
+				watchers_.erase(itr);
 		}
 		bool watch(const std::string &id, watcher_t watcher)
 		{
@@ -303,7 +321,7 @@ namespace xstore
 		{
 			if (type_ != e_vec)
 			{
-				reset();
+				del();
 				type_ = e_vec;
 				val_.vec_ = new std::vector<obj_t *>;
 			}
@@ -313,22 +331,25 @@ namespace xstore
 			return *this;
 		}
 		template<class T>
-		typename std::enable_if<std::is_integral<T>::value &&
-			!std::is_same<T, bool>::value, T>::type
+		typename std::enable_if<
+			std::is_integral<T>::value &&!
+			std::is_same<T, bool>::value, T>::type
 			get()
 		{
 			assert(type_ == e_num);
 			return static_cast<T>(val_.num_);
 		}
 		template<class T>
-		typename std::enable_if<std::is_same<T, bool>::value, T>::type
+		typename std::enable_if<
+			std::is_same<T, bool>::value, T>::type
 			get()
 		{
 			assert(type_ == e_bool);
 			return val_.bool_;
 		}
 		template<class T>
-		typename std::enable_if<std::is_floating_point<T>::value, T>::type
+		typename std::enable_if<
+			std::is_floating_point<T>::value, T>::type
 			get()
 		{
 			assert(type_ == e_float);
@@ -443,32 +464,32 @@ namespace xstore
 
 			return pos < len;
 		}
-		static inline std::pair<bool, std::string>
-			get_text(int &pos, int len, const char *str)
+		static inline std::pair<bool, std::string> 
+			get_str(int &pos, int len, const char *str)
 		{
 			assert(len > 0);
 			assert(pos >= 0);
 			assert(pos < len);
 			assert(str[pos] == '"');
 
-			std::string key;
+			std::string text;
 			++pos;
 			while (pos < len)
 			{
 				if (str[pos] != '"')
-					key.push_back(str[pos]);
-				else if (key.size() && key.back() == '\\')
-					key.push_back(str[pos]);
+					text.push_back(str[pos]);
+				else if (text.size() && text.back() == '\\')
+					text.push_back(str[pos]);
 				else
 				{
 					++pos;
-					return{ true, key };
+					return{ true, text };
 				}
 				++pos;
 			}
-			return{ false,"" };
+			return{ false, ""};
 		}
-		static int get_bool(int &pos, int len, const char *str)
+		static obj_t *get_bool(int &pos, int len, const char *str)
 		{
 			assert(len > 0);
 			assert(pos >= 0);
@@ -484,13 +505,23 @@ namespace xstore
 					break;
 				++pos;
 			}
-			if (key == "true")
-				return 1;
-			else if (key == "false")
-				return 0;
-			return -1;
+			if(key == "true")
+			{
+				auto *o = new obj_t;
+				*o = true;
+				return o;
+			}
+			else if(key == "false")
+			{
+				auto *o = new obj_t;
+				*o = false;
+				return o;
+			}
+			return nullptr;
+
 		}
-		static inline bool get_null(int &pos, int len, const char *str)
+		static inline obj_t *
+			get_null(int &pos, int len, const char *str)
 		{
 			assert(len > 0);
 			assert(pos >= 0);
@@ -506,11 +537,14 @@ namespace xstore
 					break;
 				++pos;
 			}
-			if (null == "null")
-				return true;
-			return false;
+			if(null == "null")
+			{
+				return new obj_t;
+			}
+			return nullptr;
 		}
-		static inline obj_t *get_num(int &pos, int len, const char *str)
+		static inline obj_t *
+			get_num(int &pos, int len, const char *str)
 		{
 			bool sym = false;
 			std::string tmp;
@@ -543,11 +577,11 @@ namespace xstore
 				*o = d;
 				return o;
 			}
-			int64_t val = std::strtoll(tmp.c_str(), 0, 10);
+			int64_t i = std::strtoll(tmp.c_str(), 0, 10);
 			if (errno == ERANGE)
 				return nullptr;
 			obj_t *o = new obj_t;
-			*o = val;
+			*o = i;
 			return o;
 		}
 
@@ -555,8 +589,10 @@ namespace xstore
 		static inline obj_t* get_vec(int &pos, int len, const char *str)
 		{
 			obj_t *vec = new obj_t;
+
 			if (str[pos] == '[')
 				pos++;
+
 			while (pos < len)
 			{
 				switch (str[pos])
@@ -574,10 +610,10 @@ namespace xstore
 				}
 				case '"':
 				{
-					std::pair<bool, std::string > res = get_text(pos, len, str);
-					if (res.first == false)
+					auto o = get_str(pos, len, str);
+					if (o.first == false)
 						goto fail;
-					vec->add(res.second);
+					vec->add(o.second);
 					break;
 				}
 				case 'n':
@@ -597,10 +633,8 @@ namespace xstore
 				case 'f':
 				case 't':
 				{
-					int b = get_bool(pos, len, str);
-					if (b == 0)
-						vec->add(false);
-					else if (b == 1)
+					auto b = get_bool(pos, len, str);
+					if(b)
 						vec->add(true);
 					else
 						goto fail;
@@ -614,7 +648,10 @@ namespace xstore
 					++pos;
 					break;
 				default:
-					if (str[pos] == '-' || str[pos] >= '0' && str[pos] <= '9')
+					if (str[pos] == '-' ||
+						str[pos] == '+' ||
+						(str[pos] >= '0' && 
+						str[pos] <= '9'))
 					{
 						obj_t *o = get_num(pos, len, str);
 						if (o == nullptr)
@@ -623,7 +660,6 @@ namespace xstore
 					}
 				}
 			}
-
 		fail:
 			delete vec;
 			return NULL;
@@ -637,13 +673,15 @@ namespace xstore
 				goto fail;\
 		} while(0)
 
-		static inline obj_t *get_obj(int &pos, int len, const char * str)
+		static inline obj_t *
+			get_obj(int &pos, int len, const char * str)
 		{
 			obj_t *obj_ptr = new obj_t;
 			obj_t &obj = *obj_ptr;
 			std::string key;
 
 			skip_space(pos, len, str);
+
 			if (pos >= len)
 				goto fail;
 			if (str[pos] == '{')
@@ -656,7 +694,7 @@ namespace xstore
 				{
 				case '"':
 				{
-					std::pair<bool, std::string > res = get_text(pos, len, str);
+					auto res = get_str(pos, len, str);
 					if (res.first == false)
 						goto fail;
 					if (key.empty())
@@ -666,7 +704,7 @@ namespace xstore
 					}
 					else
 					{
-						obj[key] = res.second;
+						*obj[key] = res.second;
 						key.clear();
 					}
 					break;
@@ -676,11 +714,9 @@ namespace xstore
 				{
 					if (key.empty())
 						goto fail;
-					int b = get_bool(pos, len, str);
-					if (b == 0)
-						obj[key] = false;
-					else if (b == 1)
-						obj[key] = true;
+					auto b = get_bool(pos, len, str);
+					if (b == nullptr)
+						obj.insert(key, b);
 					else
 						goto fail;
 					key.clear();
@@ -688,7 +724,8 @@ namespace xstore
 				}
 				case 'n':
 				{
-					if (key.empty() || get_null(pos, len, str) == false)
+					if (key.empty() ||
+						get_null(pos, len, str) == false)
 						goto fail;
 					obj[key];
 				}
@@ -699,7 +736,7 @@ namespace xstore
 					obj_t *o = get_obj(pos, len, str);
 					if (o == NULL)
 						goto fail;
-					obj[key] = std::move(*o);
+					obj.insert(key, o);
 					key.clear();
 					break;
 				}
@@ -729,33 +766,31 @@ namespace xstore
 					break;
 				case '[':
 				{
-					obj_t *vec = get_vec(pos, len, str);
-					if (!!!vec || key.empty())
+					obj_t *v = get_vec(pos, len, str);
+					if (!v || key.empty())
 						goto fail;
-					obj[key] = std::move(*vec);
+					obj.insert(key,v);
 					key.clear();
 					break;
 				}
 				default:
-					if (str[pos] == '-' || str[pos] >= '0' && str[pos] <= '9')
+					if (str[pos] == '-' ||
+						str[pos] >= '0' && 
+						str[pos] <= '9')
 					{
 						obj_t *o = get_num(pos, len, str);
 						if (!o)
 							goto fail;
-						obj[key]
+						obj.insert(key, o);
 					}
 				}
 			}
-
 		fail:
 			delete obj_ptr;
 			return NULL;
 		}
 	}
-	static inline obj_t *build_obj(const std::string &str)
-	{
-		
-	}
+	
 	static inline obj_t *build_obj(const char *str, int len)
 	{
 		int pos = 0;
@@ -772,8 +807,9 @@ namespace xstore
 		}
 		else if (ch == '"')
 		{
-			auto res = parser::get_text(pos, len, str);
-			if (res.first) {
+			auto res = parser::get_str(pos, len, str);
+			if (res.first) 
+			{
 				obj_t *o = new obj_t;
 				*o = res.second;
 				return o;
@@ -781,23 +817,23 @@ namespace xstore
 		}
 		else if (ch == 'n')
 		{
-			auto res = parser::get_null(pos, len, str);
-			if (res)
-				return new obj_t;
+			return parser::get_null(pos, len, str);
 		}
-		else if (('0' <= ch && '9' >= ch)|| '-' == ch || '+' == ch)
+		else if (('0' <= ch && '9' >= ch)||
+				 '-' == ch ||
+				 '+' == ch)
 		{
 			return  parser::get_num(pos, len, str);
 		}
 		else if (ch == 't' || ch == 'f')
 		{
-			auto res = parser::get_bool(pos, len, str);
-			if (res < 0)
-				return nullptr;
-			obj_t *obj = new obj_t;
-			*obj = !!res;
+			return parser::get_bool(pos, len, str);
 		}
 		return nullptr;
+	}
+	static inline obj_t *build_obj(const std::string &str)
+	{
+		return build_obj(str.c_str(), (int)str.size());
 	}
 	static inline void del_obj(obj_t *json)
 	{

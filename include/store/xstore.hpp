@@ -58,7 +58,6 @@ namespace xstore
 	class xson_store
 	{
 	public:
-			
 		typedef std::function<
 			void(const std::string &,//id
 					const std::string &,//path
@@ -95,7 +94,38 @@ namespace xstore
 			if(o->type_ != obj_t::e_null)
 				return result_t::e_obj_exist;
 			*o = std::move(*v);
-			del_obj(o);
+			del_obj(v);
+			return result_t::e_ok;
+		}
+		result_t add(const std::string &path, const std::string &value)
+		{
+			auto keys = to_keys(path);
+			obj_t *v = build_obj(value);
+			if (!v)
+				return result_t::e_obj_err;
+			obj_t *o = &obj_;
+			for (auto &itr : keys)
+			{
+				o = (*o)[itr];
+				if (!o)
+					return result_t::e_path_err;
+			}
+			if (o->type_ != obj_t::e_null)
+				return result_t::e_obj_exist;
+			o->add(v);
+			return result_t::e_ok;
+		}
+		result_t del(const std::string &path)
+		{
+			auto keys = to_keys(path);
+			obj_t *o = &obj_;
+			for (auto &itr : keys)
+			{
+				o = (*o)[itr];
+				if (!o)
+					return result_t::e_path_err;
+			}
+			o->del();
 			return result_t::e_ok;
 		}
 		result_t add_watch(const std::string & path,const std::string & id)
@@ -115,6 +145,7 @@ namespace xstore
 		{
 			assert(cb);
 			watcher_callback_ = cb;
+			obj_.open_callback(true);
 		}
 	private:
 		void on_watch(const event_t &e)
@@ -123,7 +154,9 @@ namespace xstore
 				(e.type_ == event_t::e_add    ? "add": 
 				(e.type_ == event_t::e_delete ? "delete":
 				(e.type_ == event_t::e_update ? "update":
-								(assert(false),"err_type"))));
+				(e.type_ == event_t::e_lost_watcher ? "lost_watcher":
+					(assert(false),"err_type")))));
+
 			assert(watcher_callback_);
 			watcher_callback_(e.id_,e.path_,type,e.obj->str());
 		}

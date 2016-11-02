@@ -45,7 +45,6 @@ namespace xstore
 		} val_;
 		obj_t *parent_ = NULL;
 		obj_t *root = this;
-		uint32_t ver_ = 0;
 		std::string key_;
 		std::map<std::string, watcher_t> watchers_;
 
@@ -237,6 +236,8 @@ namespace xstore
 		}
 		void del()
 		{
+			if (type_ == e_null)
+				return;
 			if (type_ == e_obj)
 				for (auto &itr : *val_.obj_)
 					itr.second->del();
@@ -246,19 +247,40 @@ namespace xstore
 
 			event_t e;
 			get_path(e.path_);
-			if (e.path_.size())
-				e.path_.pop_back();
 			e.type_ = event_t::e_delete;
 			e.obj = this;
 			reset_val();
-			if (open_callback())
-				on_change(e);
+			on_change(e);
 			reset_watcher();
+			if (parent_ &&parent_->type_ == e_vec)
+			{
+				int i = 0;
+				for (auto &itr = parent_->val_.vec_->begin();
+					itr != parent_->val_.vec_->end()
+					;)
+				{
+					if (*itr == this)
+					{
+						itr = parent_->val_.vec_->erase(itr);
+					}
+					else
+					{
+						(*itr)->key_ = "[" + std::to_string(i)+"]";
+						++itr;
+					}
+
+				}
+				delete this;
+			}
 		}
 		void on_change(event_t &e)
 		{
+			if (!open_callback())
+				return;
+
 			if(e.path_.size() && e.path_.back() == '\\')
 				e.path_.pop_back();
+
 			for (auto &itr : watchers_)
 			{
 				e.id_ = itr.first;
@@ -275,6 +297,8 @@ namespace xstore
 			e.type_ = event_t::e_lost_watcher;
 			e.obj = this;
 			get_path(e.path_);
+			if (e.path_.size() && e.path_.back() == '\\')
+				e.path_.pop_back();
 			for (auto &itr : watchers_)
 			{
 				e.id_ = itr.first;
@@ -287,6 +311,24 @@ namespace xstore
 			auto itr = watchers_.find(id);
 			if(itr != watchers_.end())
 				watchers_.erase(itr);
+		}
+		std::string dump_watcher()
+		{
+			std::string data;
+			if (type_ == e_vec)
+				for (auto &itr : *val_.vec_)
+					data += itr->dump_watcher();
+			else if(type_ == e_obj)
+				for (auto &itr : *val_.obj_)
+					data += itr.second->dump_watcher();
+			std::string path;
+			get_path(path);
+			for (auto &itr: watchers_)
+			{
+				data += path + itr.first;
+				data += "\n";
+			}
+			return data;
 		}
 		bool watch(const std::string &id, watcher_t watcher)
 		{
@@ -311,24 +353,36 @@ namespace xstore
 			obj_t *obj = new obj_t;
 			obj->parent_ = this;
 			obj->root = root;
-			obj->key_ = "$" + std::to_string(val_.vec_->size());
+			obj->key_ = "[" + std::to_string(val_.vec_->size())+"]";
 			*obj = val;
 			val_.vec_->push_back(obj);
+			event_t e;
+			e.type_ = event_t::e_add;
+			e.obj = obj;
+			obj->get_path(e.path_);
+			on_change(e);
 			return *this;
 		}
 
-		obj_t& add(obj_t *obj)
+		bool add(obj_t *obj)
 		{
-			if (type_ != e_vec)
+			if (type_ != e_vec && type_ != e_null)
+				return false;
+			if(type_ == e_null)
 			{
-				del();
 				type_ = e_vec;
 				val_.vec_ = new std::vector<obj_t *>;
 			}
 			obj->parent_ = this;
 			obj->root = root;
+			obj->key_ = "[" + std::to_string(val_.vec_->size()) + "]";
 			val_.vec_->push_back(obj);
-			return *this;
+			event_t e;
+			e.type_ = event_t::e_add;
+			e.obj = obj;
+			obj->get_path(e.path_);
+			on_change(e);
+			return true;
 		}
 		template<class T>
 		typename std::enable_if<

@@ -1,9 +1,0 @@
-[submodule "deps/xjson"]
-	path = deps/xjson
-	url = https://github.com/akzi/xjson.git
-[submodule "deps/xnet"]
-	path = deps/xnet
-	url = https://github.com/akzi/xnet.git
-[submodule "deps/xtest"]
-	path = deps/xtest
-	url = https://github.com/akzi/xtest.git

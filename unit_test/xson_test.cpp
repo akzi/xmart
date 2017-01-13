@@ -42,4 +42,13 @@ XTEST_SUITE(xon_test)
 		xassert(o->type_ = obj_t::e_obj);
 
 	}
+	XUNIT_TEST(dump_watcher)
+	{
+		obj_t obj;
+		obj["hello"]->watch("watcher1",[](const event_t &e) {});
+		(*obj["hello"])["world"]->watch("watcher2", [](const event_t &e) {});
+		(*(*obj["hello"])["world2"]).watch("watcher2", [](const event_t &e) {});
+
+		auto data = obj.dump_watcher();
+	}
 }
